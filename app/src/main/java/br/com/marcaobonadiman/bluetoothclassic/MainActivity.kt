@@ -18,7 +18,6 @@ import android.view.KeyEvent
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import kotlinx.android.synthetic.main.activity_main.*
 import java.io.IOException
@@ -35,7 +34,6 @@ class MainActivity : AppCompatActivity() {
         private val _timer = Timer()
         private const val deviceNome = "ESP32test" // Nome do dispositivo que tem de parear (É o Bluetooth do ESP32 que está gerando)
         private var isConnectBT = false
-        private var conectar = false
         var myThread: Thread? = null
         var deviceESP32: BluetoothDevice? = null
         private var m_bluetoothSocket: BluetoothSocket? = null
@@ -54,34 +52,35 @@ class MainActivity : AppCompatActivity() {
             sendCommand("*\n") // Ao enviar um "*", faz o ESP32 inverter o estado do LED
         }
 
-        if (ContextCompat.checkSelfPermission(this@MainActivity,Manifest.permission.ACCESS_FINE_LOCATION) !== PackageManager.PERMISSION_GRANTED) {
-            // Solicita permissão ao usuário
-            if (ActivityCompat.shouldShowRequestPermissionRationale(this@MainActivity,Manifest.permission.ACCESS_FINE_LOCATION)) {
-                ActivityCompat.requestPermissions(this@MainActivity,arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1)
-            } else {
-                ActivityCompat.requestPermissions(this@MainActivity,arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1)
-            }
-        }else{
-            // Se já foi dado a permissão
+        val permission = ContextCompat.checkSelfPermission( this, Manifest.permission.ACCESS_FINE_LOCATION)
+
+        if (permission != PackageManager.PERMISSION_GRANTED) {
+            permissionsResultCallback.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        } else {
+            println("Permission isGranted")
             Init()
         }
+
     }
 
-    // Resposta da solicitação ao usuário quanto a permissão
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        when (requestCode) {
-            1 -> {
-                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    if ((ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) === PackageManager.PERMISSION_GRANTED)) {
-                        //Toast.makeText(this, "Permission Granted", Toast.LENGTH_SHORT).show()
-                        Init() // Se foi dado permissão inicia o app
-                    }
-                } else {
-                    //Toast.makeText(this, "Permission Denied", Toast.LENGTH_SHORT).show()
-                    finish() // Se a permição foi negada, sai do app
+    private val permissionsResultCallback = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()){
+        when (it) {
+            true -> { println("Permission has been granted by user")
+                Init()
+            }
+            false -> {
+                runOnUiThread {
+                    TextViewStatus.setTextColor(ContextCompat.getColor(baseContext, R.color.red))
+                    val toSend = "Permissão foi negada,\n\n o App será finalizado"
+                    TextViewStatus.text = toSend
                 }
-                return
+                _timer.schedule(object : TimerTask() {
+                    override fun run() {
+                        finish()
+                    }
+                }, 5000)
+
             }
         }
     }
@@ -92,7 +91,7 @@ class MainActivity : AppCompatActivity() {
 
        // Verifica se o Bluetooth está ligado, se não estiver pede ao usuário confirmação para ligar
        if (!m_Adapter.isEnabled){
-           var intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+           intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
            resultLigaBT.launch(intent)
        }else{
            Init2()
@@ -158,22 +157,31 @@ class MainActivity : AppCompatActivity() {
     // Procura pelo "ESP32test" e se está pareados. Se não achou sai do App, se achou e não está pareado, vai tentar Parear
     @SuppressLint("MissingPermission")
     private fun getPairedDevices() {
-        val pairedDevice: Set<BluetoothDevice> = m_Adapter.getBondedDevices()
-        if (pairedDevice.isNotEmpty()) {
-            var flagErro = true
-            for (device in pairedDevice) {
-                //Log.e("Nome", device.name)
-                if (device.name == deviceNome) {
-                    deviceESP32 = device
-                    conectar = true
-                    flagErro = false
-                    break
-                }
-            }
-            if (flagErro) {  // Se não apareceu na lista dos pareados acima, tenta fazer o pareamnto
-                Parear()
-            }
+        runOnUiThread {
+            val toSend = "Procurando pelo dispositivo:\n\n $deviceNome\n\naguarde..."
+            TextViewStatus.text=toSend
         }
+        _timer.schedule(object : TimerTask() {
+            override fun run() {
+                val pairedDevice: Set<BluetoothDevice> = m_Adapter.getBondedDevices()
+                if (pairedDevice.isNotEmpty()) {
+                    var flagErro = true
+                    for (device in pairedDevice) {
+                        if (device.name == deviceNome) {
+                            deviceESP32 = device
+                            flagErro = false
+                            break
+                        }
+                    }
+                    if (flagErro) {  // Se não apareceu na lista dos pareados acima, tenta fazer o pareamnto
+                        Parear()
+                    }else{
+                        Conectar()
+                    }
+                }
+
+            }
+        }, 50)
     }
 
     // Faz o pareamento com o dispositivo
@@ -182,7 +190,7 @@ class MainActivity : AppCompatActivity() {
         try {
             val intentFilter = IntentFilter(BluetoothDevice.ACTION_FOUND)
             intentFilter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-            intentFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
+            //intentFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
             intentFilter.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             this@MainActivity.registerReceiver(myReceiver, intentFilter)
             m_Adapter.startDiscovery()
@@ -194,18 +202,14 @@ class MainActivity : AppCompatActivity() {
     // Faz o tratamento do pareamento
     private val myReceiver: BroadcastReceiver = object : BroadcastReceiver() {
         @SuppressLint("MissingPermission")
-        var cnt:Int=0
         var achou:Boolean = false
         @SuppressLint("MissingPermission")
         override fun onReceive(context: Context, intent: Intent) {
-            val msg = Message.obtain()
+            //val msg = Message.obtain()
             val action = intent.action
             //Log.e("Scan", " -> $msg  ->  "+action.toString()  )
-            if (BluetoothAdapter.ACTION_DISCOVERY_STARTED.equals(action)) {
-                runOnUiThread {
-                    TextViewStatus.text="Procurando pelo dispositivo:\n\n $deviceNome\n\naguarde..."
-                }
-            }else if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
+            //if (BluetoothAdapter.ACTION_DISCOVERY_STARTED.equals(action)) {
+            if (BluetoothDevice.ACTION_BOND_STATE_CHANGED.equals(action)) {
                 // Resposta da confirmação do Pareamento.
                 //Log.e("Teste",BluetoothDevice.BOND_BONDED.toString()+"  "+BluetoothDevice.BOND_BONDING.toString()+"  "+BluetoothDevice.BOND_NONE.toString() )
                 val state = intent.extras?.get(BluetoothDevice.EXTRA_BOND_STATE) as Int
@@ -215,7 +219,8 @@ class MainActivity : AppCompatActivity() {
                 }else if(state==BluetoothDevice.BOND_BONDED){ // Se o usuário confirmou
                     m_Adapter.cancelDiscovery()
                     runOnUiThread {
-                        TextViewStatus.text="Pareando com dispositivo:\n\n$deviceNome\n\naguarde..."
+                        val toSend = "Pareando com dispositivo:\n\n$deviceNome\n\naguarde..."
+                        TextViewStatus.text=toSend
                     }
                     // Chama novamente a rotina "getPairedDevices" para tentar conectar após 5 segundos (Se houver erro, aumente esse tempo)
                     _timer.schedule(object : TimerTask() {
@@ -226,19 +231,21 @@ class MainActivity : AppCompatActivity() {
                 }
             }else if (BluetoothDevice.ACTION_FOUND.equals(action)) {
                 val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
-                var nomeDevice: String? = device?.name
+                val nomeDevice: String? = device?.name
                 if (nomeDevice == deviceNome) {
                     m_Adapter.cancelDiscovery()
                     achou=true
                     runOnUiThread {
-                        TextViewStatus.text="Achou o dispositivo:\n\n$deviceNome"
+                        val toSend = "Achou o dispositivo:\n\n$deviceNome"
+                        TextViewStatus.text=toSend
                     }
                     _timer.schedule(object : TimerTask() {
                         override fun run() {
                             // Vai fazer o pedido de pareamento, é usado um retardo de 100 ms para o aviso acima poder ser visalizado na tela.
                             // Esse pedido é assincrono, isto é, não espera pela resposta, por isso o "intentFilter.addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)" é
                             // usado na função de Parear, para captar a resposta de confirmação do pareamento.
-                            var isBonded = createBond(device) // Vai solicitar permissão ao usuário para parear
+                            //var isBonded = createBond(device) // Vai solicitar permissão ao usuário para parear
+                            createBond(device) // Vai solicitar permissão ao usuário para parear
                         }
                     }, 100)
                 }
@@ -246,10 +253,10 @@ class MainActivity : AppCompatActivity() {
                 // Finaliza o App pois não achou o dispositivo para parear.
                 m_Adapter.cancelDiscovery()
                 if (!achou){
-                    //Log.e("Fim Scan", "BluetoothDevice ... Count:" + cnt);
                     runOnUiThread {
                         TextViewStatus.setTextColor(ContextCompat.getColor(context, R.color.red))
-                        TextViewStatus.text="Dispositivo não encotrado,\n\n o App será finalizado"
+                        val toSend = "Dispositivo não encotrado,\n\n o App será finalizado"
+                        TextViewStatus.text= toSend
                     }
                     _timer.schedule(object : TimerTask() {
                         override fun run() {
@@ -266,8 +273,7 @@ class MainActivity : AppCompatActivity() {
     fun createBond(btDevice: BluetoothDevice?): Boolean {
         val class1 = Class.forName("android.bluetooth.BluetoothDevice")
         val createBondMethod = class1.getMethod("createBond")
-        val returnValue = createBondMethod.invoke(btDevice) as Boolean
-        return returnValue ?: false
+        return createBondMethod.invoke(btDevice) as Boolean
     }
 
     // Thread de serviço. Se o dispositivo estiver pareado, tenta fazer a conexção. Se obtiver sucesso fica escutando os dados que o dispositivo está enviando
@@ -280,14 +286,10 @@ class MainActivity : AppCompatActivity() {
                 var out: OutputStream
                 while (!stopWorker) {
                     try {
-                        if (conectar) {
-                            conectar = false
-                            Conectar() // Tenta conectar no ESP32
-                        }
                         if (isConnectBT) { // Escuta se o dispoditivo está enviando dados ...
                             input = m_bluetoothSocket?.inputStream!!
                             out   = m_bluetoothSocket?.outputStream!!
-                            var bytesAvailable: Int = input.available()
+                            val bytesAvailable: Int = input.available()
                             if (bytesAvailable > 0) {
                                 while (input.available() > 0) {
                                     val packetBytes = ByteArray(bytesAvailable)
@@ -334,7 +336,8 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("MissingPermission")
     private fun Conectar() {
         runOnUiThread {
-            TextViewStatus.text="Conectando no dispostivo:\n\n $deviceNome\n\naguarde..."
+            val toSend = "Conectando no dispostivo:\n\n $deviceNome\n\naguarde..."
+            TextViewStatus.text=toSend
         }
         try {
             m_bluetoothSocket = deviceESP32!!.createRfcommSocketToServiceRecord(m_myUUID)
@@ -342,21 +345,25 @@ class MainActivity : AppCompatActivity() {
             if (m_bluetoothSocket!!.isConnected()) {
                 isConnectBT = true
                 runOnUiThread {
-                    TextViewStatus.setTextColor(ContextCompat.getColor(this, R.color.green));
-                    TextViewStatus.text="O dispositivo:\n\n $deviceNome\n\nestá conectado"
+                    TextViewStatus.setTextColor(ContextCompat.getColor(this, R.color.green))
+                    val toSend = "O dispositivo:\n\n $deviceNome\n\nestá conectado"
+                    TextViewStatus.text=toSend
                     LinearLayoutLed.visibility= View.VISIBLE
                 }
                 sendCommand("ST\n") // Envia uma solicitação de status ao dispositivo
             } else {
                 runOnUiThread {
-                    TextViewStatus.setTextColor(ContextCompat.getColor(this, R.color.red));
-                    TextViewStatus.text="O dispositivo:\n\n $deviceNome\n\nestá pareado,\n\n mais não conseguiu conectar!"
+                    TextViewStatus.setTextColor(ContextCompat.getColor(this, R.color.red))
+                    val toSend ="O dispositivo:\n\n $deviceNome\n\nestá pareado,\n\n mais não conseguiu conectar!"
+                    TextViewStatus.text=toSend
+
                 }
             }
         } catch (e: IOException) {
             runOnUiThread {
-                TextViewStatus.setTextColor(ContextCompat.getColor(this, R.color.red));
-                TextViewStatus.text="O dispositivo:\n\n $deviceNome\n\nestá pareado,\n\n mais não conseguiu conectar!"
+                TextViewStatus.setTextColor(ContextCompat.getColor(this, R.color.red))
+                val toSend ="O dispositivo:\n\n $deviceNome\n\nestá pareado,\n\n mais não conseguiu conectar!"
+                TextViewStatus.text=toSend
             }
         }
     }
