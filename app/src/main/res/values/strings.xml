@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">BluetoothClassic</string>
+    <string name="info">A lâmpada é um botão,\n\n toque nela para acender ou apagar</string>
+    <string name="conectado">Bluetooth conectado</string>
+    <string name="desligado">Bluetooth desligado!!!</string>
+</resources>
